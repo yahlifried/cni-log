@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -46,18 +47,16 @@ func TestLogging(t *testing.T) {
 }
 
 var _ = Describe("CNI Logging Operations", func() {
+	var logFile string
+	var logFileName string
+	var tmpDir string
+
 	BeforeEach(func() {
 		initLogger()
-	})
-
-	var logFile string
-
-	BeforeEach(func() {
-		logFile = path.Join(os.TempDir(), "test.log")
-	})
-
-	AfterEach(func() {
-		Expect(os.RemoveAll(logFile)).To(Succeed())
+		tmpDir = GinkgoT().TempDir()
+		SetLogFileBaseDir(tmpDir)
+		logFileName = "test.log"
+		logFile = path.Join(tmpDir, logFileName)
 	})
 
 	Context("Default settings", func() {
@@ -98,14 +97,14 @@ var _ = Describe("CNI Logging Operations", func() {
 				It("does not report an error", func() {
 					errStr := captureStdErr(SetLogStderr, true)
 					Expect(errStr).To(BeEmpty())
-					errStr = captureStdErr(SetLogFile, logFile)
+					errStr = captureStdErr(SetLogFile, logFileName)
 					Expect(errStr).To(BeEmpty())
 				})
 			})
 
 			When("error logging is disabled while file logging is enabled", func() {
 				It("does not report an error", func() {
-					errStr := captureStdErr(SetLogFile, logFile)
+					errStr := captureStdErr(SetLogFile, logFileName)
 					Expect(errStr).To(BeEmpty())
 					errStr = captureStdErr(SetLogStderr, false)
 					Expect(errStr).To(BeEmpty())
@@ -133,26 +132,20 @@ var _ = Describe("CNI Logging Operations", func() {
 
 		When("the log file name is valid", func() {
 			It("prepares the logger's writer and creates the log file", func() {
-				SetLogFile(logFile)
+				SetLogFile(logFileName)
 				Expect(logWriter).To(Equal(logger))
 				Expect(logFile).To(BeAnExistingFile())
 			})
 		})
 
 		When("the log file's parent directory does not exist", func() {
-			var logFileDir string
-
 			BeforeEach(func() {
-				logFileDir = path.Join(os.TempDir(), "nested/nested")
-				logFile = path.Join(logFileDir, "test.log")
-			})
-
-			AfterEach(func() {
-				Expect(os.RemoveAll(logFileDir)).To(Succeed())
+				logFileName = path.Join("nested", "nested", "test.log")
+				logFile = path.Join(tmpDir, logFileName)
 			})
 
 			It("should be created", func() {
-				SetLogFile(logFile)
+				SetLogFile(logFileName)
 				Expect(logWriter).To(Equal(logger))
 				Expect(logFile).To(BeAnExistingFile())
 			})
@@ -161,43 +154,35 @@ var _ = Describe("CNI Logging Operations", func() {
 		When("the log file name is invalid", func() {
 			It("an error to standard output is thrown", func() {
 				filename := "/proc/foobar.log"
-				expectedLoggerOutput := fmt.Sprintf(logFileFailMsg, filename)
+				expectedLoggerOutput := fmt.Sprintf(logFileFailMsgWithError, filename, absolutePathsFailMsg)
 				loggerOutput := captureStdErr(SetLogFile, filename)
 				Expect(loggerOutput).To(Equal(expectedLoggerOutput))
 			})
 		})
 
 		When("the log file is set to a symbolic link", func() {
-			var file string
-			var symlink string
+			var symlinkTarget string
+			var symlinkName string
+			var baseDir string
 
 			BeforeEach(func() {
-				tempDir := os.TempDir()
-				file = path.Join(tempDir, "symlink")
-				symlink = path.Join(tempDir, "symtarget.txt")
+				baseDir = GinkgoT().TempDir()
+				SetLogFileBaseDir(baseDir)
 
-				err := os.MkdirAll(file, 0755)
-				if err != nil {
-					Expect(err).ToNot(HaveOccurred())
-				}
+				symlinkTarget = path.Join(baseDir, "symlink-target-dir")
+				symlinkName = "symtarget.txt"
 
-				err = os.Symlink(file, symlink)
-				if err != nil {
-					Expect(err).ToNot(HaveOccurred())
-				}
-			})
-
-			AfterEach(func() {
-				err := os.Remove(file)
+				err := os.MkdirAll(symlinkTarget, 0755)
 				Expect(err).ToNot(HaveOccurred())
-				err = os.Remove(symlink)
+
+				err = os.Symlink(symlinkTarget, path.Join(baseDir, symlinkName))
 				Expect(err).ToNot(HaveOccurred())
 			})
 
 			It("an error to standard error is thrown", func() {
-				expectedLoggerOutput := fmt.Sprintf(symlinkEvalFailMsg, symlink)
-				loggerOutput := captureStdErr(SetLogFile, symlink)
-				Expect(loggerOutput).To(ContainSubstring(expectedLoggerOutput))
+				expectedLoggerOutput := fmt.Sprintf(logFileFailMsgWithError, symlinkName, symlinkEvalFailMsg)
+				loggerOutput := captureStdErr(SetLogFile, symlinkName)
+				Expect(loggerOutput).To(Equal(expectedLoggerOutput))
 			})
 		})
 	})
@@ -213,7 +198,7 @@ var _ = Describe("CNI Logging Operations", func() {
 					Compress:   true,
 				}
 
-				SetLogFile(logFile)
+				SetLogFile(logFileName)
 				logOpts := &LogOptions{
 					MaxAge:     getPrimitivePointer(1),
 					MaxSize:    getPrimitivePointer(10),
@@ -234,7 +219,7 @@ var _ = Describe("CNI Logging Operations", func() {
 					MaxBackups: 1,
 					Compress:   true,
 				}
-				SetLogFile(logFile)
+				SetLogFile(logFileName)
 				logOpts := &LogOptions{
 					MaxBackups: getPrimitivePointer(1),
 					Compress:   getPrimitivePointer(true),
@@ -246,7 +231,7 @@ var _ = Describe("CNI Logging Operations", func() {
 
 		When("logOptions isn't set at all", func() {
 			It("should provide a default logOptions", func() {
-				SetLogFile(logFile)
+				SetLogFile(logFileName)
 				expectedLogger := &lumberjack.Logger{
 					Filename:   logFile,
 					MaxAge:     5,
@@ -264,7 +249,7 @@ var _ = Describe("CNI Logging Operations", func() {
 	Context("Logging messages", Ordered, func() {
 		When("log level is set to ERROR", Ordered, func() {
 			It("should print appropriate >= error messages to log file", func() {
-				SetLogFile(logFile)
+				SetLogFile(logFileName)
 				SetLogLevel(StringToLevel(errorStr))
 				SetLogStderr(false)
 
@@ -281,7 +266,7 @@ var _ = Describe("CNI Logging Operations", func() {
 			})
 
 			It("should print appropriate >= error structured messages to log file", func() {
-				SetLogFile(logFile)
+				SetLogFile(logFileName)
 				SetLogLevel(StringToLevel(errorStr))
 				SetLogStderr(false)
 
@@ -300,7 +285,7 @@ var _ = Describe("CNI Logging Operations", func() {
 
 		When("log level is set to INFO", func() {
 			It("should print appropriate >= info messages to log file", func() {
-				SetLogFile(logFile)
+				SetLogFile(logFileName)
 				SetLogLevel(StringToLevel(infoStr))
 				SetLogStderr(false)
 
@@ -317,7 +302,7 @@ var _ = Describe("CNI Logging Operations", func() {
 			})
 
 			It("should print appropriate >= info structured messages to log file", func() {
-				SetLogFile(logFile)
+				SetLogFile(logFileName)
 				SetLogLevel(StringToLevel(infoStr))
 				SetLogStderr(false)
 
@@ -336,7 +321,7 @@ var _ = Describe("CNI Logging Operations", func() {
 
 		When("log level is set to DEBUG and messages are logged", func() {
 			It("should print appropriate >= debug messages to log file", func() {
-				SetLogFile(logFile)
+				SetLogFile(logFileName)
 				SetLogLevel(StringToLevel(debugStr))
 				SetLogStderr(false)
 
@@ -353,7 +338,7 @@ var _ = Describe("CNI Logging Operations", func() {
 			})
 
 			It("should print appropriate >= debug structured messages to log file", func() {
-				SetLogFile(logFile)
+				SetLogFile(logFileName)
 				SetLogLevel(StringToLevel(debugStr))
 				SetLogStderr(false)
 
@@ -392,7 +377,7 @@ var _ = Describe("CNI Logging Operations", func() {
 			})
 
 			It("should not log to custom out after a call to SetLogFile", func() {
-				SetLogFile(logFile)
+				SetLogFile(logFileName)
 				Infof(infoMsg)
 				Expect(out.String()).NotTo(ContainSubstring(infoMsg))
 			})
@@ -421,7 +406,7 @@ var _ = Describe("CNI Logging Operations", func() {
 
 		When("file logging is on and error logging is off", func() {
 			BeforeEach(func() {
-				errStr := captureStdErr(SetLogFile, logFile)
+				errStr := captureStdErr(SetLogFile, logFileName)
 				Expect(errStr).To(BeEmpty())
 				errStr = captureStdErr(SetLogStderr, false)
 				Expect(errStr).To(BeEmpty())
@@ -449,7 +434,7 @@ var _ = Describe("CNI Logging Operations", func() {
 
 		When("file logging and error logging are turned on simultaneously", func() {
 			BeforeEach(func() {
-				Expect(captureStdErr(SetLogFile, logFile)).To(BeEmpty())
+				Expect(captureStdErr(SetLogFile, logFileName)).To(BeEmpty())
 				Expect(captureStdErr(SetLogStderr, true)).To(BeEmpty())
 			})
 
@@ -464,7 +449,7 @@ var _ = Describe("CNI Logging Operations", func() {
 	Context("Updating the logging prefix", Ordered, func() {
 		BeforeEach(func() {
 			SetLogStderr(true)
-			SetLogFile(logFile)
+			SetLogFile(logFileName)
 		})
 
 		When("a custom prefix is not provided", func() {
@@ -506,7 +491,7 @@ var _ = Describe("CNI Logging Operations", func() {
 	Context("Updating the structured logging prefix", Ordered, func() {
 		BeforeEach(func() {
 			SetLogStderr(true)
-			SetLogFile(logFile)
+			SetLogFile(logFileName)
 		})
 
 		When("a custom structured prefix is not provided", func() {
@@ -559,6 +544,141 @@ var _ = Describe("CNI Logging Operations", func() {
 			})
 		})
 
+	})
+})
+
+var _ = Describe("CNI Log Path Security", func() {
+	var baseDir string
+
+	BeforeEach(func() {
+		initLogger()
+		baseDir = GinkgoT().TempDir()
+		SetLogFileBaseDir(baseDir)
+	})
+
+	Context("SetLogFile path restrictions", func() {
+		AfterEach(func() {
+			disableFileLogging()
+		})
+
+		When("SetLogFile is called with a path containing traversal sequences", func() {
+			It("should not create files via path traversal", func() {
+				escapePath := "subdir/../../traversal-proof.log"
+
+				errStr := captureStdErr(SetLogFile, escapePath)
+
+				expectedLoggerOutput := fmt.Sprintf(logFileFailMsgWithError, escapePath, baseDirectoryEscapeFailMsg)
+				Expect(errStr).To(Equal(expectedLoggerOutput))
+				traversalTarget := filepath.Join(filepath.Dir(baseDir), "traversal-proof.log")
+				Expect(traversalTarget).NotTo(BeAnExistingFile(),
+					"VULNERABILITY: SetLogFile should reject paths with traversal sequences")
+			})
+		})
+
+		When("SetLogFile is called with an arbitrary absolute path", func() {
+			It("should not create files at unrestricted locations", func() {
+				arbitraryDir := GinkgoT().TempDir()
+				arbitraryPath := path.Join(arbitraryDir, "unrestricted.log")
+
+				SetLogFile(arbitraryPath)
+
+				Expect(arbitraryPath).NotTo(BeAnExistingFile(),
+					"VULNERABILITY: SetLogFile should not create files at unrestricted paths without a configured base directory")
+			})
+		})
+
+		When("SetLogFile is called with a path that creates nested directories", func() {
+			It("should not create arbitrary directory trees", func() {
+				arbitraryDir := GinkgoT().TempDir()
+				deepPath := path.Join(arbitraryDir, "a", "b", "c", "evil.log")
+
+				SetLogFile(deepPath)
+
+				Expect(path.Join(arbitraryDir, "a")).NotTo(BeADirectory(),
+					"VULNERABILITY: SetLogFile should not create arbitrary directory trees")
+			})
+		})
+
+		When("SetLogFile is called with a relative traversal path", func() {
+			It("should reject paths that escape the base directory", func() {
+				escapePath := path.Join("..", "escape.log")
+				errStr := captureStdErr(SetLogFile, escapePath)
+
+				expectedLoggerOutput := fmt.Sprintf(logFileFailMsgWithError, escapePath, baseDirectoryEscapeFailMsg)
+				Expect(errStr).To(Equal(expectedLoggerOutput))
+				parentFile := filepath.Join(filepath.Dir(baseDir), "escape.log")
+				Expect(parentFile).NotTo(BeAnExistingFile())
+			})
+		})
+
+		When("a parent directory in the path is a symbolic link", func() {
+			It("should reject the path", func() {
+				outsideDir := GinkgoT().TempDir()
+				linkDir := filepath.Join(baseDir, "linkdir")
+				Expect(os.Symlink(outsideDir, linkDir)).To(Succeed())
+
+				logPath := filepath.Join("linkdir", "app.log")
+				loggerOutput := captureStdErr(SetLogFile, logPath)
+
+				expectedLoggerOutput := fmt.Sprintf(logFileFailMsgWithError, logPath, symlinkEvalFailMsg)
+				Expect(loggerOutput).To(Equal(expectedLoggerOutput))
+				Expect(filepath.Join(outsideDir, "app.log")).NotTo(BeAnExistingFile())
+			})
+		})
+
+		When("SetLogFile is called with a path that resolves to the base directory", func() {
+			It("should reject the path", func() {
+				errStr := captureStdErr(SetLogFile, ".")
+
+				expectedLoggerOutput := fmt.Sprintf(logFileFailMsgWithError, ".", baseDirAsFileFailMsg)
+				Expect(errStr).To(Equal(expectedLoggerOutput))
+			})
+		})
+
+		When("SetLogFile is called with a valid relative path", func() {
+			It("should create the file under the base directory", func() {
+				SetLogFile("app.log")
+
+				expectedPath := filepath.Join(baseDir, "app.log")
+				Expect(expectedPath).To(BeAnExistingFile())
+				Expect(logger.Filename).To(Equal(expectedPath))
+			})
+		})
+
+		When("SetLogFile is called with a valid relative subdirectory path", func() {
+			It("should create the file and directories under the base directory", func() {
+				SetLogFile(path.Join("subdir", "app.log"))
+
+				expectedPath := filepath.Join(baseDir, "subdir", "app.log")
+				Expect(expectedPath).To(BeAnExistingFile())
+				Expect(logger.Filename).To(Equal(expectedPath))
+			})
+		})
+
+		When("SetLogFileBaseDir is used to override the default", func() {
+			It("should resolve paths relative to the custom base directory", func() {
+				customBase := GinkgoT().TempDir()
+				SetLogFileBaseDir(customBase)
+
+				SetLogFile("custom.log")
+
+				expectedPath := filepath.Join(customBase, "custom.log")
+				Expect(expectedPath).To(BeAnExistingFile())
+				Expect(logger.Filename).To(Equal(expectedPath))
+			})
+		})
+
+		When("SetLogFileBaseDir is called with an empty or current-directory path", func() {
+			It("should reset to the default base directory for empty input", func() {
+				SetLogFileBaseDir("")
+				Expect(logFileBaseDir).To(Equal(defaultLogFileBaseDir))
+			})
+
+			It("should reset to the default base directory for current directory", func() {
+				SetLogFileBaseDir(".")
+				Expect(logFileBaseDir).To(Equal(defaultLogFileBaseDir))
+			})
+		})
 	})
 })
 
